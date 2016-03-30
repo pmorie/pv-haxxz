@@ -211,7 +211,17 @@ func syncPV(pv *PV) {
 			// Let the PVC loop handle it.
 		} else {
 			// Volume is bound to a claim, but the claim is bound elsewhere
-			// FIXME: PVC was deleted and recreated *or* PVC was created with this ptr
+			if pv.Annotations[annBoundByController] == "yes" {
+				// We did this; fix it.
+				pv.Spec.ClaimRef = nil
+				pv.Status.Phase = Available
+				if err := CommitPV(pv); err != nil {
+					// Retry later.
+					return
+				}
+			} else {
+				// The PV must have been created with this ptr; leave it alone.
+			}
 		}
 	}
 }
