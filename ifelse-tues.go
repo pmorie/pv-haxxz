@@ -196,7 +196,49 @@ func syncPV(pv *PV) {
 			// If we get into this block, the claim must have been deleted;
 			// NOTE: releasePV may either release the PV back into the pool or
 			// recycle it or do nothing (retain)
-			releasePV(pv)
+
+			// HOWTO RELEASE A PV
+			if pv.Spec.ReclaimPolicy == "Retain" {
+				pv.Status.Phase = "released"
+				if err := CommitPV(pv); err != nil {
+					// retry later
+					return
+				}
+
+				return
+			} else if pv.Spec.ReclaimPolicy == "Delete" {
+				plugin := findDeleterPluginForPV(pv)
+				if plugin != nil {
+					// maintain a map with the current deleter goroutines that are running
+					// if the key is already present in the map, return
+					//
+					// launch the goroutine
+					// the goroutine:
+					// 1. deletes the storage asset
+					// 2. deletes the PV API object
+					// 3. deletes itself from the map when it's done
+				} else {
+					// make an event calling out that no deleter was configured
+					// delete the PV
+				}
+			} else if pv.Spec.ReclaimPolicy == "Recycle" {
+				plugin := findRecyclerPluginForPV(pv)
+				if plugin != nil {
+					// maintain a map of running scrubber-pod-monitoring
+					// goroutines, guarded by mutex
+					//
+					// launch a goroutine that:
+					//
+					// 1. launches a scrubber pod; the pod's name is deterministically created based on PV uid
+					// 2. if the pod is rejected, yer done
+					// 3. if the create succeeds,
+				} else {
+					// make an event calling out that no deleter was configured
+					// delete the PV
+				}
+
+			}
+
 		} else if pvc.Spec.VolumePtr == nil {
 			// This block collapses into a NOP; we're leaving this here for
 			// proof that we don't need this annotation
