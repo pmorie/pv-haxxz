@@ -67,7 +67,7 @@ func SyncPVC(pvc *PVClaim) {
 				// User asked for a PV that is not claimed
 				// OBSERVATION: pvc is "Pending", pv is "Available"
 				pv.Spec.ClaimPtr = pvc
-				pv.Annotations[annWasEverBound] = "yes"
+				pv.Spec.ClaimPtr.UID = pvc.UID
 				pv.Annotations[annBoundByController] = "yes"
 				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
@@ -85,7 +85,7 @@ func SyncPVC(pvc *PVClaim) {
 			} else if pv.Spec.ClaimPtr == pvc {
 				// User asked for a PV that is claimed by this PVC
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
-				pv.Annotations[annWasEverBound] = "yes"
+				pv.ClaimPtr.UID = pvc.UID
 				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
 					// Retry later.
@@ -133,7 +133,7 @@ func SyncPVC(pvc *PVClaim) {
 			// Claim is bound but volume has come unbound.  Fix it.
 			Event("PVClaim is bound to PV, but not vice-versa: fixing it")
 			pv.Spec.ClaimPtr = pvc
-			pv.Annotations[annWasEverBound] = "yes"
+			pv.Spec.ClaimPtr.UID = pvc.UID
 			pv.Status.Phase = Bound
 			if err := CommitPV(pv); err != nil {
 				// Retry later.
@@ -160,9 +160,9 @@ func SyncPVC(pvc *PVClaim) {
 	}
 }
 
-//FIXME: consider a rogue master
-//FIXME: does master election help at all?
-//FIXME: what if all PV writes were in syncPV(), with PVC->PV happening first
+// FIXME: consider a rogue master
+// FIXME: does master election help at all?
+// FIXME: extract status setting from spec setting
 
 // This must be async-safe, idempotent, and crash/restart safe, since it
 // happens in a loop as well as on-demand.
@@ -179,15 +179,21 @@ func syncPV(pv *PV) {
 	} else /* pv.Spec.ClaimPtr != nil */ {
 		// Volume is bound to a claim.
 		pvc = GetPVC(pv.Spec.ClaimPtr)
+		if pv.Spec.ClaimPtr.UID == 0 {
+			// The PV is reserved for a claim which exists, but has not yet
+			// been bound to this PV yet; the PVC sync will handle it
+			return
+		} else if pvc.UID != pv.Spec.ClaimPtr.UID {
+			// The claim that the PV was pointing to was deleted, and
+			// another with the same name created.
+			pvc = nil
+		}
+
 		if pvc == nil {
-			// Volume is bound to a claim that doesn't exist
-			if pvc.Annotations[annWasEverBound] == "" {
-				// Volume was not yet bound, so must have been pre-bound by the user.
-				return
-			} else {
-				// Claim must have been deleted
-				releasePV(pv) //TODO: flesh this out
-			}
+			// If we get into this block, the claim must have been deleted;
+			// NOTE: releasePV may either release the PV back into the pool or
+			// recycle it or do nothing (retain)
+			releasePV(pv) //TODO: flesh this out
 		} else if pvc.Spec.VolumePtr == nil {
 			// This block collapses into a NOP; we're leaving this here for
 			// completeness
