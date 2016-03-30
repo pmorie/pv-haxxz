@@ -105,7 +105,8 @@ func SyncPVC(pvc *PVClaim) {
 					// User asked for a specific PV, retry later
 					return
 				} else {
-					// This should never happen because we set the PVC->PV link with the "established" annotation.
+					// This should never happen because we set the PVC->PV
+					// link with the "established" annotation.
 					LogError("IMPOSSIBURU!")
 				}
 			}
@@ -130,8 +131,9 @@ func SyncPVC(pvc *PVClaim) {
 				return
 			}
 		} else if pv.Spec.ClaimPtr == nil {
-			// Claim is bound but volume has come unbound.  Fix it.
-			Event("PVClaim is bound to PV, but not vice-versa: fixing it")
+			// Claim is bound but volume has come unbound.
+			// This is really a race with other PVCs; it may not work.
+			Event("PVClaim is bound to PV, but not vice-versa: attempting to fix it")
 			pv.Spec.ClaimPtr = pvc
 			pv.Spec.ClaimPtr.UID = pvc.UID
 			pv.Status.Phase = Bound
@@ -169,7 +171,6 @@ func SyncPVC(pvc *PVClaim) {
 func syncPV(pv *PV) {
 	if pv.Spec.ClaimPtr == nil {
 		// Volume is unused
-		// FIXME: this conflicts with PVC loop, which tries to relink!
 		pv.Status.Phase = Available
 		if err := CommitPV(pv); err != nil {
 			// Retry later.
@@ -178,12 +179,14 @@ func syncPV(pv *PV) {
 		return
 	} else /* pv.Spec.ClaimPtr != nil */ {
 		// Volume is bound to a claim.
-		pvc = GetPVC(pv.Spec.ClaimPtr)
 		if pv.Spec.ClaimPtr.UID == 0 {
-			// The PV is reserved for a claim which exists, but has not yet
-			// been bound to this PV yet; the PVC sync will handle it
+			// The PV is reserved for a PVC; that PVC has not yet been
+			// bound to this PV; the PVC sync will handle it.
 			return
-		} else if pvc.UID != pv.Spec.ClaimPtr.UID {
+		}
+		// Get the PVC by _name_
+		pvc = GetPVC(pv.Spec.ClaimPtr)
+		if pvc.UID != pv.Spec.ClaimPtr.UID {
 			// The claim that the PV was pointing to was deleted, and
 			// another with the same name created.
 			pvc = nil
@@ -193,10 +196,10 @@ func syncPV(pv *PV) {
 			// If we get into this block, the claim must have been deleted;
 			// NOTE: releasePV may either release the PV back into the pool or
 			// recycle it or do nothing (retain)
-			releasePV(pv) //TODO: flesh this out
+			releasePV(pv)
 		} else if pvc.Spec.VolumePtr == nil {
 			// This block collapses into a NOP; we're leaving this here for
-			// completeness
+			// proof that we don't need this annotation
 			if pv.Annotations[annBoundByController] == "yes" {
 				// The binding is not completed; let PVC sync handle it
 			} else {
@@ -208,7 +211,7 @@ func syncPV(pv *PV) {
 			// Let the PVC loop handle it.
 		} else {
 			// Volume is bound to a claim, but the claim is bound elsewhere
-			//FIXME:: PVC was deleted and recreated *or* PVC was created with this ptr
+			// FIXME: PVC was deleted and recreated *or* PVC was created with this ptr
 		}
 	}
 }
