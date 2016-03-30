@@ -204,7 +204,6 @@ func syncPV(pv *PV) {
 					// retry later
 					return
 				}
-
 				return
 			} else if pv.Spec.ReclaimPolicy == "Delete" {
 				plugin := findDeleterPluginForPV(pv)
@@ -212,14 +211,13 @@ func syncPV(pv *PV) {
 					// maintain a map with the current deleter goroutines that are running
 					// if the key is already present in the map, return
 					//
-					// launch the goroutine
-					// the goroutine:
+					// launch the goroutine that:
 					// 1. deletes the storage asset
 					// 2. deletes the PV API object
 					// 3. deletes itself from the map when it's done
 				} else {
 					// make an event calling out that no deleter was configured
-					// delete the PV
+					// mark the PV as failed
 				}
 			} else if pv.Spec.ReclaimPolicy == "Recycle" {
 				plugin := findRecyclerPluginForPV(pv)
@@ -228,17 +226,19 @@ func syncPV(pv *PV) {
 					// goroutines, guarded by mutex
 					//
 					// launch a goroutine that:
-					//
+					// 0. verify the PV object still needs to be recycled or return
 					// 1. launches a scrubber pod; the pod's name is deterministically created based on PV uid
-					// 2. if the pod is rejected, yer done
-					// 3. if the create succeeds,
+					// 2. if the pod is rejected for dup, adopt the existing pod
+					// 2.5. if the pod is rejected for any other reason, retry later
+					// 3. else (the create succeeds), ok
+					// 4. wait for pod completion
+					// 5. marks the PV API object as available
+					// 6. deletes itself from the map when it's done
 				} else {
-					// make an event calling out that no deleter was configured
-					// delete the PV
+					// make an event calling out that no recycler was configured
+					// mark the PV as failed
 				}
-
 			}
-
 		} else if pvc.Spec.VolumePtr == nil {
 			// This block collapses into a NOP; we're leaving this here for
 			// proof that we don't need this annotation
