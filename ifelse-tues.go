@@ -19,6 +19,7 @@ func SyncPVC(pvc *PVClaim) {
 				// OBSERVATION: pvc is "Pending", pv is "Available"
 				if pv.Spec.ClaimPtr == nil {
 					pv.Spec.ClaimPtr = pvc
+					pv.Spec.ClaimPtr.UID = pvc.UID
 					pv.Annotations[annBoundByController] = "yes"
 				}
 				// NOTE: do not set 'everBound' annotation here. It must be
@@ -138,7 +139,7 @@ func SyncPVC(pvc *PVClaim) {
 				// Retry later.
 				return
 			}
-		} else if pv.Spec.ClaimPtr == pvc {
+		} else if pv.Spec.ClaimPtr.UID == pvc.UID {
 			// All is well
 			pv.Status.Phase = Bound
 			if err := CommitPV(pv); err != nil {
@@ -147,9 +148,12 @@ func SyncPVC(pvc *PVClaim) {
 			}
 		} else {
 			// Claim is bound but volume has a different claimant.
+			// Set the claim phase to 'Lost', which is a terminal
+			// phase.
 			pvc.Status.Phase = Lost
 			if err := CommitPVC(pvc); err != nil {
-				// Retry later.
+				// If this fails, we will fall back into the enclosing block
+				// during the next call to syncPVC; retry later.
 				return
 			}
 		}
