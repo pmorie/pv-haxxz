@@ -14,7 +14,7 @@ func SyncPVC(pvc *PVClaim) {
 				// No PV could be found
 				// OBSERVATION: pvc is "Pending", will retry
 				if pvc.Annotations[annClass] != "" {
-					plugin := findRecyclerPluginForPV(pv)
+					plugin := findProvisionerPluginForPV(pv) // Need to flesh this out
 					if plugin != nil {
 						//FIXME: left off here
 						// No match was found and provisioning was requested.
@@ -203,12 +203,12 @@ func syncPV(pv *PV) {
 			// recycle it or do nothing (retain)
 
 			// HOWTO RELEASE A PV
+			pv.Status.Phase = "released"
+			if err := CommitPV(pv); err != nil {
+				// retry later
+				return
+			}
 			if pv.Spec.ReclaimPolicy == "Retain" {
-				pv.Status.Phase = "released"
-				if err := CommitPV(pv); err != nil {
-					// retry later
-					return
-				}
 				return
 			} else if pv.Spec.ReclaimPolicy == "Delete" {
 				plugin := findDeleterPluginForPV(pv)
@@ -240,6 +240,7 @@ func syncPV(pv *PV) {
 					// 3. else (the create succeeds), ok
 					// 4. wait for pod completion
 					// 5. marks the PV API object as available
+					// 5.5. clear annotations
 					// 6. deletes itself from the map when it's done
 				} else {
 					// make an event calling out that no recycler was configured
@@ -273,4 +274,48 @@ func syncPV(pv *PV) {
 			}
 		}
 	}
+}
+
+func initController() {
+	// Resync everything because we trust nobody, least of all the people who
+	// work on this code.
+	Periodically("15s", func() {
+		syncAllPVCs()
+		syncAllPVs()
+	})
+	Watch(PVClaims, func(pvc *PVClaim, ev Event) {
+		switch ev {
+		case MODIFY, CREATE:
+			// If a PVC was modified or created, we only need to sync that one.
+			syncPVC(pvc)
+		case DELETE:
+			// If a PVC was deleted, we need to touch the PV it was bound to
+			// (if it was bound at all)
+			syncPVC(pvc)
+			if pvc.Spec.VolumePtr != nil {
+				syncPV(pvc.Spec.VolumePtr)
+			}
+		}
+	})
+	Watch(PVs, func(pv *PV, ev Event) {
+		switch ev {
+		case MODIFY:
+			// If a PV was modified, we only need to sync that one.
+			syncPV(pv)
+		case CREATE, DELETE:
+			// If a PV was created or deleted we need to re-evaluate all PVCs.
+			syncPV(pv)
+			syncAllPVCs()
+		}
+	})
+}
+
+func syncAllPVCs() {
+	// wait until we have seen an update of both PV and PVC
+	// for each pvc {}
+}
+
+func syncAllPVs() {
+	// wait until we have seen an update of both PV and PVC
+	// for each pv {}
 }
