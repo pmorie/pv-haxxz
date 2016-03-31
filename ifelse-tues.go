@@ -26,10 +26,14 @@ const annWasEverBound = "pv.kubernetes.io/bound-completed"
 // annotation means the binding was done by the user (i.e. pre-bound).
 const annBoundByController = "pv.kubernetes.io/bound-by-controller"
 
+// This annotation represents a new field which instructs dynamic provisioning
+// to choose a particular storage class (aka profile).
+const annClass = "volume.alpha.kubernetes.io/storage-class"
+
 // This must be async-safe, idempotent, and crash/restart safe, since it
 // happens in a loop as well as on-demand.
 func SyncPVC(pvc *PVClaim) {
-	if pvc.Annotations[annWasEverBound] == "" {
+	if !hasAnnotation(pvc, annWasEverBound) {
 		// This is a new PVC that has not completed binding
 		// OBSERVATION: pvc is "Pending"
 		if pvc.Spec.VolumePtr == nil {
@@ -38,7 +42,7 @@ func SyncPVC(pvc *PVClaim) {
 			if pv == nil {
 				// No PV could be found
 				// OBSERVATION: pvc is "Pending", will retry
-				if pvc.Annotations[annClass] != "" {
+				if hasAnnotation(pvc, annClass) {
 					plugin := findProvisionerPluginForPV(pv) // Need to flesh this out
 					if plugin != nil {
 						//FIXME: left off here
@@ -65,7 +69,7 @@ func SyncPVC(pvc *PVClaim) {
 				if pv.Spec.ClaimPtr == nil {
 					pv.Spec.ClaimPtr = pvc
 					pv.Spec.ClaimPtr.UID = pvc.UID
-					pv.Annotations[annBoundByController] = "yes"
+					setAnnotation(pv, annBoundByController)
 				}
 				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
@@ -75,8 +79,8 @@ func SyncPVC(pvc *PVClaim) {
 				}
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
 				pvc.Spec.VolumePtr = pv
-				pvc.Annotations[annWasEverBound] = "yes"
-				pvc.Annotations[annBoundByController] = "yes"
+				setAnnotation(pvc, annWasEverBound)
+				setAnnotation(pvc, annBoundByController)
 				pvc.Status.Phase = Bound
 				if err := CommitPVC(pvc); err != nil {
 					// Commit failed; we will handle this partially committed
@@ -98,14 +102,14 @@ func SyncPVC(pvc *PVClaim) {
 				// OBSERVATION: pvc is "Pending", pv is "Available"
 				pv.Spec.ClaimPtr = pvc
 				pv.Spec.ClaimPtr.UID = pvc.UID
-				pv.Annotations[annBoundByController] = "yes"
+				setAnnotation(pv, annBoundByController)
 				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
 					// Retry later.
 					return
 				}
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
-				pvc.Annotations[annWasEverBound] = "yes"
+				setAnnotation(pvc, annWasEverBound)
 				pvc.Status.Phase = Bound
 				if err := CommitPVC(pvc); err != nil {
 					// Retry later.
@@ -121,7 +125,7 @@ func SyncPVC(pvc *PVClaim) {
 					// Retry later.
 					return
 				}
-				pvc.Annotations[annWasEverBound] = "yes"
+				setAnnotation(pvc, annWasEverBound)
 				pvc.Status.Phase = Bound
 				if err := CommitPVC(pvc); err != nil {
 					// Retry later.
@@ -131,7 +135,7 @@ func SyncPVC(pvc *PVClaim) {
 			} else {
 				// User asked for a PV that is claimed by someone else
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
-				if pvc.Annotations[annBoundByController] == "" {
+				if !hasAnnotation(pvc, annBoundByController) {
 					// User asked for a specific PV, retry later
 					return
 				} else {
@@ -141,7 +145,7 @@ func SyncPVC(pvc *PVClaim) {
 				}
 			}
 		}
-	} else /* pvc.Annotations[annWasEverBound] != "" */ {
+	} else /* hasAnnotation(pvc, annWasEverBound) */ {
 		// This PVC has previously been bound
 		// OBSERVATION: pvc is not "Pending"
 		if pvc.Spec.VolumePtr == nil {
@@ -276,7 +280,7 @@ func syncPV(pv *PV) {
 		} else if pvc.Spec.VolumePtr == nil {
 			// This block collapses into a NOP; we're leaving this here for
 			// completeness.
-			if pv.Annotations[annBoundByController] == "yes" {
+			if hasAnnotation(pv, annBoundByController) {
 				// The binding is not completed; let PVC sync handle it
 			} else {
 				// Dangling PV; try to re-establish the link in the PVC sync
@@ -287,7 +291,7 @@ func syncPV(pv *PV) {
 			// Let the PVC loop handle it.
 		} else {
 			// Volume is bound to a claim, but the claim is bound elsewhere
-			if pv.Annotations[annBoundByController] == "yes" {
+			if hasAnnotation(pv, annBoundByController) {
 				// We did this; fix it.
 				pv.Spec.ClaimRef = nil
 				pv.Status.Phase = Available
@@ -344,4 +348,13 @@ func syncAllPVCs() {
 func syncAllPVs() {
 	// wait until we have seen an update of both PV and PVC
 	// for each pv {}
+}
+
+func hasAnnotation(obj Object, ann string) bool {
+	_, found := obj.Annotations[ann]
+	return found
+}
+
+func setAnnotation(obj Object, ann string) {
+	obj.Annotations[ann] = "yes"
 }
