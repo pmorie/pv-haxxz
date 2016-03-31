@@ -8,11 +8,31 @@ func SyncPVC(pvc *PVClaim) {
 		// This is a new PVC that has not completed binding
 		// OBSERVATION: pvc is "Pending"
 		if pvc.Spec.VolumePtr == nil {
-			// User did not care which PV they get
-			pv = FindAcceptablePV(pvc)
+			// User did not care which PV they get.
+			pv = FindAcceptablePV(pvc) // needs to consider class, etc.
 			if pv == nil {
 				// No PV could be found
 				// OBSERVATION: pvc is "Pending", will retry
+				if pvc.Annotations[annClass] != "" {
+					plugin := findRecyclerPluginForPV(pv)
+					if plugin != nil {
+						//FIXME: left off here
+						// No match was found and provisioning was requested.
+						//
+						// maintain a map with the current provisioner goroutines that are running
+						// if the key is already present in the map, return
+						//
+						// launch the goroutine that:
+						// 1. calls plugin.Provision to make the storage asset
+						// 2. gets back a PV object (partially filled)
+						// 3. create the PV API object, with claimRef -> pvc
+						// 4. deletes itself from the map when it's done
+						// return
+					} else {
+						// make an event calling out that no provisioner was configured
+						// return, try later?
+					}
+				}
 				return
 			} else /* pv != nil */ {
 				// Found a PV for this claim
@@ -22,21 +42,6 @@ func SyncPVC(pvc *PVClaim) {
 					pv.Spec.ClaimPtr.UID = pvc.UID
 					pv.Annotations[annBoundByController] = "yes"
 				}
-				// NOTE: do not set 'everBound' annotation here. It must be
-				// set after both the PV and PVC are updated; additionally, we
-				// can use the bound-by-controller annotation on the PV to
-				// distinguish between a valid state and a broken one
-				//
-				// NOTE (later): we decided that we will not, in fact, ever
-				// set the 'ever bound' annotation on the PV in order to
-				// reduce the number of places that annotations are set, in
-				// general
-				//
-				// NOTE (even later): it is possible that the PV has already
-				// been committed; FOR NOW, we will do a second commit with
-				// the same information, leaving as a possible future
-				// optimization to check the state of the PV and avoid a
-				// second, NOP commit
 				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
 					// Nothing was saved; we will fall back into the same
@@ -218,6 +223,8 @@ func syncPV(pv *PV) {
 				} else {
 					// make an event calling out that no deleter was configured
 					// mark the PV as failed
+					// NB: external provisioners/deleters are currently not
+					// considered.
 				}
 			} else if pv.Spec.ReclaimPolicy == "Recycle" {
 				plugin := findRecyclerPluginForPV(pv)
@@ -241,11 +248,11 @@ func syncPV(pv *PV) {
 			}
 		} else if pvc.Spec.VolumePtr == nil {
 			// This block collapses into a NOP; we're leaving this here for
-			// proof that we don't need this annotation
+			// completeness.
 			if pv.Annotations[annBoundByController] == "yes" {
 				// The binding is not completed; let PVC sync handle it
 			} else {
-				// Dangling PV; possibly^Wprobably re-establish the link in the PVC sync
+				// Dangling PV; try to re-establish the link in the PVC sync
 			}
 			return
 		} else if pvc.Spec.VolumePtr == pv {
