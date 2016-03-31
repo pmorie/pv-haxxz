@@ -1,4 +1,29 @@
+// This file represents a high-level view of the primary storage controller (PV
+// binding, recycling, and provisioning).
+//
+// Design:
+//
+// The fundamental key to this design is the bi-directional "pointer" between
+// PersistentVolumes (PVs) and PersistentVolumeClaims (PVCs), which is
+// represented here as pvc.Spec.VolumePtr and pv.Spec.ClaimPtr (which are a
+// little different in name than the actual Go structs).  The bi-directionality
+// is complicated to manage in a transactionless system, but without it we
+// can't ensure sane behavior in the face of different forms of trouble.  For
+// example, a rogue HA controller instance could end up racing and making
+// multiple bindings that are indistinguishable, resulting in potential data
+// loss.
+//
+// This supports pre-bound (by the creator) objects in both directions: a PVC
+// that wants a specific PV or a PV that is reserved for a specific PVC.
+
+// This annotation applies to PVCs.  It indicates that the lifecycle of the PVC
+// has passed through the initial setup.  This information changes how we
+// interpret some observations of the state of the objects.
 const annWasEverBound = "pv.kubernetes.io/bound-completed"
+
+// This annotation applies to PVs and PVCs.  It indicates that the binding
+// (PV->PVC or PVC->PV) was installed by the controller.  The absence of this
+// annotation means the binding was done by the user (i.e. pre-bound).
 const annBoundByController = "pv.kubernetes.io/bound-by-controller"
 
 // This must be async-safe, idempotent, and crash/restart safe, since it
@@ -168,8 +193,8 @@ func SyncPVC(pvc *PVClaim) {
 }
 
 // FIXME: consider a rogue master
-// FIXME: does master election help at all?
-// FIXME: extract status setting from spec setting
+// FIXME: extract status setting from spec setting, and convince ourselves we
+//        always set status correctly.
 
 // This must be async-safe, idempotent, and crash/restart safe, since it
 // happens in a loop as well as on-demand.
