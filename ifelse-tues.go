@@ -191,7 +191,7 @@ func syncPV(pv *PV) {
 		}
 		// Get the PVC by _name_
 		pvc = GetPVC(pv.Spec.ClaimPtr)
-		if pvc.UID != pv.Spec.ClaimPtr.UID {
+		if pvc != nil && pvc.UID != pv.Spec.ClaimPtr.UID {
 			// The claim that the PV was pointing to was deleted, and
 			// another with the same name created.
 			pvc = nil
@@ -240,7 +240,8 @@ func syncPV(pv *PV) {
 					// 3. else (the create succeeds), ok
 					// 4. wait for pod completion
 					// 5. marks the PV API object as available
-					// 5.5. clear annotations
+					// 5.5. clear ClaimRef.UID
+					// 5.6. if boundByController, clear ClaimRef & boundByController annotation
 					// 6. deletes itself from the map when it's done
 				} else {
 					// make an event calling out that no recycler was configured
