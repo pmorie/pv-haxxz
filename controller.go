@@ -175,8 +175,9 @@ func SyncPVC(pvc *PVClaim) {
 		if pvc.Spec.VolumePtr == nil {
 			// Claim was bound before but not any more.
 			pvc.Status.Phase = Lost
-			if err := CommitPVC(pvc); err != nil {
-				// Retry later.
+			if err := CommitPVCStatus(pvc.Status); err != nil {
+				// PVC status was not saved, but we will fall into the same
+				// condition in a later iteration.
 				return
 			}
 		}
@@ -184,8 +185,9 @@ func SyncPVC(pvc *PVClaim) {
 		if pv == nil {
 			// Claim is bound to a non-existing volume.
 			pvc.Status.Phase = Lost
-			if err := CommitPVC(pvc); err != nil {
-				// Retry later.
+			if err := CommitPVCStatus(pvc.Status); err != nil {
+				// PVC status was not saved, but we will fall into the same
+				// condition in a later iteration.
 				return
 			}
 		} else if pv.Spec.ClaimPtr == nil {
@@ -226,7 +228,7 @@ func SyncPVC(pvc *PVClaim) {
 			// Set the claim phase to 'Lost', which is a terminal
 			// phase.
 			pvc.Status.Phase = Lost
-			if err := CommitPVC(pvc); err != nil {
+			if err := CommitPVCStatus(pvc.Status); err != nil {
 				// If this fails, we will fall back into the enclosing block
 				// during the next call to syncPVC; retry later.
 				return
