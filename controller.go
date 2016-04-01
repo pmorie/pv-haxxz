@@ -85,10 +85,14 @@ func SyncPVC(pvc *PVClaim) {
 				pvc.Spec.VolumePtr = pv
 				setAnnotation(pvc, annWasEverBound)
 				setAnnotation(pvc, annBoundByController)
-				pvc.Status.Phase = Bound
 				if err := CommitPVC(pvc); err != nil {
 					// Commit failed; we will handle this partially committed
 					// state in the next call to syncPVC
+					return
+				}
+				pvc.Status.Phase = Bound
+				if err := CommitPVCStatus(pvc.Status); err != nil {
+					// PVC status was not saved. syncPVC will set the status
 					return
 				}
 				// OBSERVATION: pvc is "Bound", pv is "Bound"
@@ -118,9 +122,13 @@ func SyncPVC(pvc *PVClaim) {
 				}
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
 				setAnnotation(pvc, annWasEverBound)
-				pvc.Status.Phase = Bound
 				if err := CommitPVC(pvc); err != nil {
 					// Retry later.
+					return
+				}
+				pvc.Status.Phase = Bound
+				if err := CommitPVCStatus(pvc.Status); err != nil {
+					// PVC status was not saved. syncPVC will set the status
 					return
 				}
 				// OBSERVATION: pvc is "Bound", pv is "Bound"
@@ -138,9 +146,13 @@ func SyncPVC(pvc *PVClaim) {
 					return
 				}
 				setAnnotation(pvc, annWasEverBound)
-				pvc.Status.Phase = Bound
 				if err := CommitPVC(pvc); err != nil {
 					// Retry later.
+					return
+				}
+				pvc.Status.Phase = Bound
+				if err := CommitPVCStatus(pvc.Status); err != nil {
+					// PVC status was not saved. syncPVC will set the status
 					return
 				}
 				// OBSERVATION: pvc is "Bound", pv is "Bound"
@@ -198,6 +210,14 @@ func SyncPVC(pvc *PVClaim) {
 				pv.Status.Phase = Bound
 				if err := CommitPVStatus(pv.Status); err != nil {
 					// Status was not saved. syncPV will set the status
+					return
+				}
+			}
+			if pvc.Status.Phase != Bound {
+				pvc.Status.Phase = Bound
+				if err := CommitPVCStatus(pvc.Status); err != nil {
+					// PVC status was not saved, but we will fall into the same
+					// condition in a later iteration.
 					return
 				}
 			}
