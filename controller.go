@@ -71,10 +71,14 @@ func SyncPVC(pvc *PVClaim) {
 					pv.Spec.ClaimPtr.UID = pvc.UID
 					setAnnotation(pv, annBoundByController)
 				}
-				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
 					// Nothing was saved; we will fall back into the same
 					// condition in the next call to this method
+					return
+				}
+				pv.Status.Phase = Bound
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Status was not saved. syncPV will set the status
 					return
 				}
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
@@ -103,9 +107,13 @@ func SyncPVC(pvc *PVClaim) {
 				pv.Spec.ClaimPtr = pvc
 				pv.Spec.ClaimPtr.UID = pvc.UID
 				setAnnotation(pv, annBoundByController)
-				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
 					// Retry later.
+					return
+				}
+				pv.Status.Phase = Bound
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Status was not saved. syncPV will set the status
 					return
 				}
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
@@ -120,9 +128,13 @@ func SyncPVC(pvc *PVClaim) {
 				// User asked for a PV that is claimed by this PVC
 				// OBSERVATION: pvc is "Pending", pv is "Bound"
 				pv.ClaimPtr.UID = pvc.UID
-				pv.Status.Phase = Bound
 				if err := CommitPV(pv); err != nil {
 					// Retry later.
+					return
+				}
+				pv.Status.Phase = Bound
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Status was not saved. syncPV will set the status
 					return
 				}
 				setAnnotation(pvc, annWasEverBound)
@@ -170,17 +182,24 @@ func SyncPVC(pvc *PVClaim) {
 			Event("PVClaim is bound to PV, but not vice-versa: attempting to fix it")
 			pv.Spec.ClaimPtr = pvc
 			pv.Spec.ClaimPtr.UID = pvc.UID
-			pv.Status.Phase = Bound
 			if err := CommitPV(pv); err != nil {
 				// Retry later.
 				return
 			}
+			pv.Status.Phase = Bound
+			if err := CommitPVStatus(pv.Status); err != nil {
+				// Status was not saved. syncPV will set the status
+				return
+			}
 		} else if pv.Spec.ClaimPtr.UID == pvc.UID {
 			// All is well
-			pv.Status.Phase = Bound
-			if err := CommitPV(pv); err != nil {
-				// Retry later.
-				return
+			// NOTE: syncPV can handle this so it can be left out.
+			if pv.Status.Phase != Bound {
+				pv.Status.Phase = Bound
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Status was not saved. syncPV will set the status
+					return
+				}
 			}
 		} else {
 			// Claim is bound but volume has a different claimant.
@@ -288,7 +307,17 @@ func syncPV(pv *PV) {
 			return
 		} else if pvc.Spec.VolumePtr == pv {
 			// Volume is bound to a claim properly.
-			// Let the PVC loop handle it.
+			if pv.Status.Phase != Bound {
+				pv.Status.Phase = Bound
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Nothing was saved; we will fall back into the same
+					// condition in the next call to this method
+					return
+				}
+			} else {
+				// Volume is properly bound and its status is correct.
+				// nothing to do.
+			}
 		} else {
 			// Volume is bound to a claim, but the claim is bound elsewhere
 			if hasAnnotation(pv, annBoundByController) {
