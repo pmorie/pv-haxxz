@@ -252,9 +252,10 @@ func syncPV(pv *PV) {
 			// recycle it or do nothing (retain)
 
 			// HOWTO RELEASE A PV
-			pv.Status.Phase = "released"
-			if err := CommitPV(pv); err != nil {
-				// retry later
+			pv.Status.Phase = Released
+			if err := CommitPVStatus(pv); err != nil {
+				// Status was not saved; we will fall back into the same
+				// condition in the next call to this method
 				return
 			}
 			if pv.Spec.ReclaimPolicy == "Retain" {
