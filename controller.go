@@ -225,8 +225,9 @@ func syncPV(pv *PV) {
 	if pv.Spec.ClaimPtr == nil {
 		// Volume is unused
 		pv.Status.Phase = Available
-		if err := CommitPV(pv); err != nil {
-			// Retry later.
+		if err := CommitPVStatus(pv.Status); err != nil {
+			// Nothing was saved; we will fall back into the same
+			// condition in the next call to this method
 			return
 		}
 		return
@@ -321,11 +322,18 @@ func syncPV(pv *PV) {
 		} else {
 			// Volume is bound to a claim, but the claim is bound elsewhere
 			if hasAnnotation(pv, annBoundByController) {
+				// This is part of the normal operation of the controller;
+				// the controller tried to use this volume for a claim but the claim
+				// was fulfilled by another volume.
 				// We did this; fix it.
-				pv.Spec.ClaimRef = nil
-				pv.Status.Phase = Available
+				pv.Spec.ClaimPtr = nil
 				if err := CommitPV(pv); err != nil {
 					// Retry later.
+					return
+				}
+				pv.Status.Phase = Available
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Status was not saved. syncPV will set the status
 					return
 				}
 			} else {
