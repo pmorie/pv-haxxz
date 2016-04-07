@@ -244,6 +244,17 @@ func SyncPVC(pvc *PVClaim) {
 // This must be async-safe, idempotent, and crash/restart safe, since it
 // happens in a loop as well as on-demand.
 func syncPV(pv *PV) {
+	deleted, err := upgradePVFrom12(pv)
+	if err != nil {
+		// This is a placeholder PV and we could not delete it - try again next
+		// time.
+		return
+	}
+	if deleted {
+		// Placeholder PV was deleted, there is nothing else to do.
+		return
+	}
+
 	if pv.Spec.ClaimPtr == nil {
 		// Volume is unused
 		pv.Status.Phase = Available
@@ -417,4 +428,35 @@ func hasAnnotation(obj Object, ann string) bool {
 
 func setAnnotation(obj Object, ann string) {
 	obj.Annotations[ann] = "yes"
+}
+
+func FindAcceptablePV(pvc *PVC) *PV {
+	// This functions looks for a PV that matches the PVC.
+	// If there is a PV that is pre-bound to the PVC, it must return it as the
+	// top priority!
+	// This function must ignore placeholder PVs from Kubernetes 1.2, see
+	// isPlaceholderPV() below! They are pre-bound to the PVC!
+	// Otherwise, the smallest matching volume should be returned.
+}
+
+// FIXME: remove in Kubernetes 1.4 (or do we support upgrade 1.2 -> 1.4?)
+func isPlaceholderPV(pv *PV) bool {
+	const annPlaceholderProvisioningRequired = "volume.experimental.kubernetes.io/provisioning-required"
+	const provisioningCompleted = "volume.experimental.kubernetes.io/provisioning-completed"
+	return hasAnnotation(pv, annPlaceholderProvisioningRequired) && pv.Annotations[annPlaceholderProvisioningRequired] != provisioningCompleted
+}
+
+// upgradePVFrom12 upgrades a PV from old Kubernetes version.
+// FIXME: remove in Kubernetes 1.4 (or do we support upgrade 1.2 -> 1.4?)
+func upgradePVFrom12(pv *PV) (deleted bool, err error) {
+	// In the old 1.2 version we created placeholder PVs before provisioning.
+	// We should delete those and let the controller provision a new one.
+
+	if isPlaceholderPV(pv) {
+		if err := DeletePV(pv); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
 }
