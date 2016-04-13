@@ -372,6 +372,12 @@ func syncPV(pv *PV) {
 				}
 			} else {
 				// The PV must have been created with this ptr; leave it alone.
+				// The binding is not complete, mark the volume appropriately.
+				pv.Status.Phase = Available
+				if err := CommitPVStatus(pv.Status); err != nil {
+					// Status was not saved. syncPV will set the status
+					return
+				}
 			}
 		}
 	}
