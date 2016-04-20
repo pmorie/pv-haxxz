@@ -284,13 +284,17 @@ func syncPV(pv *PV) {
 			// NOTE: releasePV may either release the PV back into the pool or
 			// recycle it or do nothing (retain)
 
-			// HOWTO RELEASE A PV
-			pv.Status.Phase = Released
-			if err := CommitPVStatus(pv); err != nil {
-				// Status was not saved; we will fall back into the same
-				// condition in the next call to this method
-				return
+			// Make sure we don't overwrite previous failure of
+			// recycler/deleter.
+			if pv.Status.Phase != Failed {
+				pv.Status.Phase = Released
+				if err := CommitPVStatus(pv); err != nil {
+					// Status was not saved; we will fall back into the same
+					// condition in the next call to this method
+					return
+				}
 			}
+			// HOWTO RELEASE A PV
 			if pv.Spec.ReclaimPolicy == "Retain" {
 				return
 			} else if pv.Spec.ReclaimPolicy == "Delete" {
