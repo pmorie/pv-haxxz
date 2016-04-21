@@ -371,8 +371,11 @@ func syncPV(pv *PV) {
 					return
 				}
 			} else {
-				// The PV must have been created with this ptr; leave it alone.
-				// The binding is not complete, mark the volume appropriately.
+				// The PV was created with this pointer, but the claim is
+				// bound to another volume already. This PV is considered to
+				// be 'Available', in the sense that it is not bound, even
+				// though the set of PVs it can bind to is restricted to a
+				// specific PVC.
 				pv.Status.Phase = Available
 				if err := CommitPVStatus(pv.Status); err != nil {
 					// Status was not saved. syncPV will set the status
