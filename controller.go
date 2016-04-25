@@ -43,24 +43,12 @@ func SyncPVC(pvc *PVClaim) {
 				// No PV could be found
 				// OBSERVATION: pvc is "Pending", will retry
 				if hasAnnotation(pvc, annClass) {
-					plugin := findProvisionerPluginForPV(pv) // Need to flesh this out
-					if plugin != nil {
-						//FIXME: left off here
-						// No match was found and provisioning was requested.
-						//
-						// maintain a map with the current provisioner goroutines that are running
-						// if the key is already present in the map, return
-						//
-						// launch the goroutine that:
-						// 1. calls plugin.Provision to make the storage asset
-						// 2. gets back a PV object (partially filled)
-						// 3. create the PV API object, with claimRef -> pvc
-						// 4. deletes itself from the map when it's done
-						// return
-					} else {
-						// make an event calling out that no provisioner was configured
-						// return, try later?
+					if err = provisionClaim(claim); err != nil {
+						return err
 					}
+					// Provisioning in progress, do not continue processing this
+					// claim.
+					return nil
 				}
 				return
 			} else /* pv != nil */ {
@@ -468,4 +456,72 @@ func upgradePVFrom12(pv *PV) (deleted bool, err error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+func provisionClaim(pvc *api.PersistentVolumeClaim) error {
+	// Provisioning can take some time. Start it in a separate goroutine.
+	// Keep a map of running provisioners and start new provisioning only if
+	// it's not already running. There will be some locks around, these are
+	// left out to implementation
+
+	if !runningProvisioners.isRunning(pvc) {
+		runningProvisioners.markAsRunning(pvc)
+		go doProvisionClaim(pvc)
+	}
+}
+
+func doProvisionClaim(pvc *api.PersistentVolumeClaim) {
+	// On exit, mark the provisioner for this claim as finished
+	defer runningProvisioners.markAsFinished(pvc)
+
+	// We're the only provisioner running for the PVC now. A previous
+	// doProvisionClaim may just have finished while we were waiting for the
+	// locks. Check that PV (with deterministic name) hasn't been provisioned
+	// yet.
+	pvName := calculateProvisionedPVNameForClaim(claim)
+	pv := kubeClient.Core().PersistentVolumes().Get(pvName)
+	if pv != nil {
+		// Previous doProvisionClaim has provisioned something, let the usual
+		// binding to happen.
+		return
+	}
+
+	// Now we are sure that we need to provision something.
+	plugin := findProvisionerPluginForPV(claim)
+	if plugin = nil {
+		// Emit event that provisioning failed.
+		// Do not modify the claim and let the next syncClaim() to try again.
+		return
+	}
+
+	// Provision the volume. Plugin is responsible to return valid PV object.
+	pv, err := plung.Provision(claim)
+	if err != nil {
+		// Emit event that provisioning failed.
+		// Do not modify the claim and let the next syncClaim() to try again.
+		return
+	}
+
+	// Make sure the PV has the right name.
+	pv.Name = calculateProvisionedPVNameForClaim(claim)
+	// Bind it to the claim
+	pv.Spec.ClaimPtr.Name = claim.Name
+	pv.Spec.ClaimPtr.Namespace = claim.Namespace
+	// Make sure we delete the PV when the claim is deleted or bound to a
+	// different PV. Setting UID is part of it (see syncPV).
+	pv.Spec.ClaimPtr.UID = claim.UID
+	pv.Spec.ReclaimPolicy = api.ReclaimPolicyDelete
+
+	// Save it in etcd. TODO: try several times.
+	if err = kubeClient.Core().PersistentVolumes().Add(pv); err != nil {
+		// Save failed. Now we have a storage asset outside of Kubernetes,
+		// but we don't have appropriate PV object for it.
+		// Emit some event here and do our best to delete the storage asset.
+		deleteVolume(pv)
+		return
+	}
+
+	// Now we have bound PV and unbound claim. Following syncClaim() will fix
+	// it.
+	// TODO: poke syncClaim() to speed up binding?
 }
