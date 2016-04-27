@@ -43,12 +43,30 @@ func SyncPVC(pvc *PVClaim) {
 				// No PV could be found
 				// OBSERVATION: pvc is "Pending", will retry
 				if hasAnnotation(pvc, annClass) {
+					// User requested dynamic provisioning.
+					// provisionClaim() starts a goroutine to provision a PV
+					// for this claim.
+					// Possible outcomes:
+					// - if it succeeds, next syncClaim() will find the
+					//   provisioned PV and will bind the claim to it.
+					// - if it fails, next syncClaim() will call
+					//   provisionClaim() again, which will retry provisioning.
+					// - if it takes too long (or someone modifies the PVC),
+					//   syncClaim() will call provisionClaim() again.
+					//   provisionClaim() must be smart enough not to start new
+					//   provisioning for PVC if there is one already in
+					//   progress.
+					// - if the controller crashes and is restarted, we loose
+					//   information about running provisioner goroutines.
+					//   We will provision a new PV.
 					if err = provisionClaim(claim); err != nil {
 						return err
 					}
-					// Provisioning in progress, do not continue processing this
-					// claim.
-					return nil
+
+					// provisionClaim() started a provisioning goroutine (or
+					// there is one already in progress), there is nothing else
+					// we can do.
+					return
 				}
 				return
 			} else /* pv != nil */ {
@@ -462,16 +480,19 @@ func provisionClaim(pvc *api.PersistentVolumeClaim) error {
 	// Provisioning can take some time. Start it in a separate goroutine.
 	// Keep a map of running provisioners and start new provisioning only if
 	// it's not already running. There will be some locks around, these are
-	// left out to implementation
+	// left out to implementation.
+	//
 
 	if !runningProvisioners.isRunning(pvc) {
 		runningProvisioners.markAsRunning(pvc)
 		go doProvisionClaim(pvc)
 	}
+	return nil
 }
 
 func doProvisionClaim(pvc *api.PersistentVolumeClaim) {
-	// On exit, mark the provisioner for this claim as finished
+	// On exit, mark the provisioner for this claim as finished. We don't want
+	// multiple doProvisionClaims running in parallel for the same claim.
 	defer runningProvisioners.markAsFinished(pvc)
 
 	// We're the only provisioner running for the PVC now. A previous
@@ -482,7 +503,7 @@ func doProvisionClaim(pvc *api.PersistentVolumeClaim) {
 	pv := kubeClient.Core().PersistentVolumes().Get(pvName)
 	if pv != nil {
 		// Previous doProvisionClaim has provisioned something, let the usual
-		// binding to happen.
+		// binding happen.
 		return
 	}
 
@@ -490,7 +511,7 @@ func doProvisionClaim(pvc *api.PersistentVolumeClaim) {
 	plugin := findProvisionerPluginForPV(claim)
 	if plugin = nil {
 		// Emit event that provisioning failed.
-		// Do not modify the claim and let the next syncClaim() to try again.
+		// Do not modify the claim and let the next syncClaim() try again.
 		return
 	}
 
@@ -498,9 +519,12 @@ func doProvisionClaim(pvc *api.PersistentVolumeClaim) {
 	pv, err := plung.Provision(claim)
 	if err != nil {
 		// Emit event that provisioning failed.
-		// Do not modify the claim and let the next syncClaim() to try again.
+		// Do not modify the claim and let the next syncClaim() try again.
 		return
 	}
+
+	// NOTE: if the controller crashes here (or exits or gets SIGTERM), we will
+	// leave orphaned storage asset without having a PV for it in Kubernetes.
 
 	// Make sure the PV has the right name.
 	pv.Name = calculateProvisionedPVNameForClaim(claim)
@@ -520,6 +544,8 @@ func doProvisionClaim(pvc *api.PersistentVolumeClaim) {
 		deleteVolume(pv)
 		return
 	}
+
+	// NOTE: We can safely crash here.
 
 	// Now we have bound PV and unbound claim. Following syncClaim() will fix
 	// it.
