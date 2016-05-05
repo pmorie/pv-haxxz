@@ -30,6 +30,12 @@ const annBoundByController = "pv.kubernetes.io/bound-by-controller"
 // to choose a particular storage class (aka profile).
 const annClass = "volume.alpha.kubernetes.io/storage-class"
 
+// This annotation is added to a PV that has been dynamically provisioned by
+// Kubernetes. It's value is name of volume plugin that created the volume.
+// It serves both user (to show where a PV comes from) and Kubernetes (to
+// recognize dynamically provisioned PVs in its decissions).
+const annDynamicallyProvisioned = "pv.kubernetes.io/provisioned-by"
+
 // This must be async-safe, idempotent, and crash/restart safe, since it
 // happens in a loop as well as on-demand.
 func SyncPVC(pvc *PVClaim) {
@@ -57,6 +63,12 @@ func SyncPVC(pvc *PVClaim) {
 						// 3. create the PV API object, with claimRef -> pvc
 						// 4. deletes itself from the map when it's done
 						// return
+						//
+						// This PV API object must:
+						// - have annDynamicallyProvisioned annotation.
+						// - be fully bound to the claim that created it (incl.
+						//   PV.Spec.ClaimPtr.UID) to delete it when the claim
+						//   is deleted.
 					} else {
 						// make an event calling out that no provisioner was configured
 						// return, try later?
@@ -355,31 +367,53 @@ func syncPV(pv *PV) {
 			}
 		} else {
 			// Volume is bound to a claim, but the claim is bound elsewhere
-			if hasAnnotation(pv, annBoundByController) {
-				// This is part of the normal operation of the controller;
-				// the controller tried to use this volume for a claim but the claim
-				// was fulfilled by another volume.
-				// We did this; fix it.
-				pv.Spec.ClaimPtr = nil
-				if err := CommitPV(pv); err != nil {
-					// Retry later.
-					return
-				}
-				pv.Status.Phase = Available
-				if err := CommitPVStatus(pv.Status); err != nil {
-					// Status was not saved. syncPV will set the status
-					return
+			if hasAnnotation(pv, annDynamicallyProvisioned) {
+				// This volume was dynamically provisioned for this claim. The
+				// claim got bound elsewhere, and thus this volume is not
+				// needed. Delete it (copied from above).
+				plugin := findDeleterPluginForPV(pv)
+				if plugin != nil {
+					// maintain a map with the current deleter goroutines that are running
+					// if the key is already present in the map, return
+					//
+					// launch the goroutine that:
+					// 1. deletes the storage asset
+					// 2. deletes the PV API object
+					// 3. deletes itself from the map when it's done
+				} else {
+					// make an event calling out that no deleter was configured
+					// mark the PV as failed
+					// NB: external provisioners/deleters are currently not
+					// considered.
 				}
 			} else {
-				// The PV was created with this pointer, but the claim is
-				// bound to another volume already. This PV is considered to
-				// be 'Available', in the sense that it is not bound, even
-				// though the set of PVs it can bind to is restricted to a
-				// specific PVC.
-				pv.Status.Phase = Available
-				if err := CommitPVStatus(pv.Status); err != nil {
-					// Status was not saved. syncPV will set the status
-					return
+				// This volume is not dynamically provisioned
+				if hasAnnotation(pv, annBoundByController) {
+					// This is part of the normal operation of the controller;
+					// the controller tried to use this volume for a claim but the claim
+					// was fulfilled by another volume.
+					// We did this; fix it.
+					pv.Spec.ClaimPtr = nil
+					if err := CommitPV(pv); err != nil {
+						// Retry later.
+						return
+					}
+					pv.Status.Phase = Available
+					if err := CommitPVStatus(pv.Status); err != nil {
+						// Status was not saved. syncPV will set the status
+						return
+					}
+				} else {
+					// The PV was created with this pointer, but the claim is
+					// bound to another volume already. This PV is considered to
+					// be 'Available', in the sense that it is not bound, even
+					// though the set of PVs it can bind to is restricted to a
+					// specific PVC.
+					pv.Status.Phase = Available
+					if err := CommitPVStatus(pv.Status); err != nil {
+						// Status was not saved. syncPV will set the status
+						return
+					}
 				}
 			}
 		}
