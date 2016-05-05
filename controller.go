@@ -15,6 +15,10 @@
 //
 // This supports pre-bound (by the creator) objects in both directions: a PVC
 // that wants a specific PV or a PV that is reserved for a specific PVC.
+//
+// Note: this controller is designed for active/passive HA.  We should
+// document where things could break down in an active/active situation, but
+// active/active is out of scope for now.
 
 // This annotation applies to PVCs.  It indicates that the lifecycle of the PVC
 // has passed through the initial setup.  This information changes how we
